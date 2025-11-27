@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabase';
+
+interface User {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  cpf: string;
+  birthDate: string;
+}
 
 interface AuthContextType {
   user: User | null;
@@ -17,69 +24,86 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+    // Check if user is already logged in by checking localStorage or making a request to verify token
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      // Verify token with backend
+      fetch('/api/auth/verify', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+      .then(response => {
+        if (response.ok) {
+          return response.json();
+        }
+        throw new Error('Token invalid');
+      })
+      .then(userData => {
+        setUser(userData);
+      })
+      .catch(() => {
+        localStorage.removeItem('authToken');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+    } else {
       setLoading(false);
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+    }
   }, []);
 
   const signUp = async (email: string, password: string, userData: any) => {
-    try {
-      const { data: authData, error: signUpError } = await supabase.auth.signUp({
+    const response = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
         email,
         password,
-        options: {
-          data: {
-            first_name: userData.firstName,
-            last_name: userData.lastName,
-            cpf: userData.cpf,
-            birth_date: userData.birthDate
-          }
-        }
-      });
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        cpf: userData.cpf,
+        birthDate: userData.birthDate
+      })
+    });
 
-      if (signUpError) throw signUpError;
-      if (!authData.user) throw new Error('Failed to create user account');
-
-      const { error: profileError } = await supabase
-        .from('users')
-        .insert({
-          id: authData.user.id,
-          first_name: userData.firstName,
-          last_name: userData.lastName,
-          cpf: userData.cpf,
-          birth_date: userData.birthDate
-        });
-
-      if (profileError) {
-        await supabase.auth.signOut();
-        throw profileError;
-      }
-    } catch (error) {
-      await supabase.auth.signOut();
-      throw error;
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Registration failed');
     }
+
+    const { user: newUser, token } = await response.json();
+    localStorage.setItem('authToken', token);
+    setUser(newUser);
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        email,
+        password
+      })
     });
 
-    if (error) throw error;
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Login failed');
+    }
+
+    const { user: loggedInUser, token } = await response.json();
+    localStorage.setItem('authToken', token);
+    setUser(loggedInUser);
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    localStorage.removeItem('authToken');
+    setUser(null);
   };
 
   return (
